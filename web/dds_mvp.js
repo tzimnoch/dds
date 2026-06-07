@@ -334,3 +334,463 @@ async function sendJSON() {
                 : String(err);
     }
 }
+
+function generateRandomDeal() {
+    const suits = ['S', 'H', 'D', 'C'];
+    const pips = 'AKQJT98765432';
+    const deck = [];
+
+    for (const suit of suits) {
+        for (const pip of pips) {
+            deck.push(suit + pip);
+        }
+    }
+
+    for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+
+    const hands = { N: [], E: [], S: [], W: [] };
+    const dirs = ['N', 'E', 'S', 'W'];
+    for (let i = 0; i < 52; i++) {
+        hands[dirs[Math.floor(i / 13)]].push(deck[i]);
+    }
+
+    return hands;
+}
+
+function writeDealBinary(dds, hands) {
+    const dealPtr = dds._malloc(64);
+    const setMem = (ptr, val) => dds.setValue
+        ? dds.setValue(ptr, val, 'i32')
+        : (dds.HEAPU32 || dds.HEAP32)[ptr >> 2] = val;
+    const dirs = ['N', 'E', 'S', 'W'];
+    const suitOrder = ['S', 'H', 'D', 'C'];
+    for (let h = 0; h < 4; h++) {
+        for (let s = 0; s < 4; s++) {
+            const byteOffset = (h * 4 + s) * 4;
+            let mask = 0;
+            for (const card of hands[dirs[h]]) {
+                if (card.charAt(0) === suitOrder[s]) {
+                    const bit = 14 - PIPS.indexOf(card.charAt(1));
+                    mask |= (1 << bit);
+                }
+            }
+            setMem(dealPtr + byteOffset, mask);
+        }
+    }
+    return dealPtr;
+}
+
+function readDdTableBinary(dds, resultsPtr) {
+    const getMem = (ptr) => dds.getValue
+        ? dds.getValue(ptr, 'i32')
+        : (dds.HEAPU32 || dds.HEAP32)[ptr >> 2];
+    const table = [];
+    for (let i = 0; i < 20; i++) {
+        table.push(getMem(resultsPtr + i * 4));
+    }
+    return table;
+}
+
+async function sendJSONLegacy() {
+    const result = document.getElementById('result');
+    const result_table = document.getElementById('result-table');
+
+    var hands = collectHands();
+
+    const error_message = inputIsValid(hands);
+
+    if (error_message.length) {
+        clear_results();
+        result.innerHTML = error_message;
+        return;
+    }
+
+    clear_results();
+    result.innerHTML = 'Computing&hellip;';
+
+    try {
+        if (typeof DDS !== 'function') {
+            result.innerHTML = 'Legacy DDS module not loaded.';
+            return;
+        }
+
+        const dds = await DDS({ locateFile: (path) => path === 'dds.wasm' ? 'dds-2.9.0.wasm' : path });
+        dds._SetMaxThreads(1);
+
+        const dealPtr = dds._malloc(64);
+        const resultsPtr = dds._malloc(80);
+
+        const setMem = (ptr, val) => dds.setValue
+            ? dds.setValue(ptr, val, 'i32')
+            : (dds.HEAPU32 || dds.HEAP32)[ptr >> 2] = val;
+        const getMem = (ptr) => dds.getValue
+            ? dds.getValue(ptr, 'i32')
+            : (dds.HEAPU32 || dds.HEAP32)[ptr >> 2];
+
+        const dirs = ['N', 'E', 'S', 'W'];
+        const suitOrder = ['S', 'H', 'D', 'C'];
+        for (let h = 0; h < 4; h++) {
+            for (let s = 0; s < 4; s++) {
+                const byteOffset = (h * 4 + s) * 4;
+                let mask = 0;
+                for (const card of hands[dirs[h]]) {
+                    if (card.charAt(0) === suitOrder[s]) {
+                        const bit = 14 - PIPS.indexOf(card.charAt(1));
+                        mask |= (1 << bit);
+                    }
+                }
+                setMem(dealPtr + byteOffset, mask);
+            }
+        }
+
+        try {
+            const rc = dds._CalcDDtable(dealPtr, resultsPtr);
+
+            console.log('CalcDDtable rc:', rc);
+
+            if (rc !== 1) {
+                result.innerHTML = 'DDS error (code ' + rc + ').';
+                return;
+            }
+
+            for (var row = 1; row <= 4; row++) {
+                for (var column = 1; column <= 5; column++) {
+                    const cell = result_table.rows[row].cells[column];
+                    const strain = DENOM_TO_STRAIN[DENOMINATIONS[column - 1]];
+                    const hand = DIR_TO_HAND[DIRECTION_LETTERS[row - 1]];
+                    const value = getMem(resultsPtr + (strain * 4 + hand) * 4);
+                    cell.innerHTML = value;
+                }
+            }
+
+            result.innerHTML = '';
+        } finally {
+            dds._free(dealPtr);
+            dds._free(resultsPtr);
+        }
+    } catch (err) {
+        clear_results();
+        result.innerHTML = err instanceof Error
+            ? err.message
+            : err == null
+                ? 'Unknown error'
+                : String(err);
+    }
+}
+
+function runSpeedTest() {
+    const numDeals = 100;
+    const batchSize = 10;
+
+    console.log('Starting speed test: ' + numDeals + ' random deals in batches of ' + batchSize);
+
+    (async () => {
+        try {
+            const module = await loadDdsModule();
+
+            const allHands = [];
+            for (let i = 0; i < numDeals; i++) {
+                allHands.push(generateRandomDeal());
+            }
+
+            const totalStart = performance.now();
+
+            for (let batch = 0; batch < numDeals / batchSize; batch++) {
+                const batchStart = performance.now();
+
+                for (let i = 0; i < batchSize; i++) {
+                    const hands = allHands[batch * batchSize + i];
+                    const pbn = handsToPbn(hands);
+                    const outPtr = module._malloc(20 * 4);
+
+                    const rc = module.ccall(
+                        'dds_mvp_calc_table',
+                        'number',
+                        ['string', 'number'],
+                        [pbn, outPtr]
+                    );
+
+                    module._free(outPtr);
+
+                    if (rc !== 1) {
+                        console.error('DDS error (code ' + rc + ') on deal ' + (batch * batchSize + i));
+                    }
+                }
+
+                const batchEnd = performance.now();
+                const batchTime = batchEnd - batchStart;
+                console.log('Batch ' + (batch + 1) + ': ' + batchTime.toFixed(1) + 'ms (' + (batchTime / batchSize).toFixed(2) + 'ms per deal)');
+            }
+
+            const totalEnd = performance.now();
+            const totalTime = totalEnd - totalStart;
+            console.log('Total: ' + totalTime.toFixed(1) + 'ms (' + (totalTime / numDeals).toFixed(2) + 'ms per deal)');
+
+            const lastHands = allHands[numDeals - 1];
+            const result = document.getElementById('result');
+            const result_table = document.getElementById('result-table');
+
+            const handHoldings = ['N', 'E', 'S', 'W'].map(dir => {
+                const suits = lastHands[dir];
+                const bySuit = { S: [], H: [], D: [], C: [] };
+                for (const card of suits) {
+                    bySuit[card.charAt(0)].push(card.charAt(1));
+                }
+                return ['S', 'H', 'D', 'C'].map(s => bySuit[s].sort((a, b) => PIPS.indexOf(a) - PIPS.indexOf(b)).join('')).join('.');
+            });
+            clear_results();
+            fillFormWithTestData(handHoldings);
+
+            const lastPbn = handsToPbn(lastHands);
+            console.log('Last deal PBN: ' + lastPbn);
+            console.log('Last deal hands:', handHoldings.join(' '));
+
+            const outPtr = module._malloc(20 * 4);
+            const rc = module.ccall(
+                'dds_mvp_calc_table',
+                'number',
+                ['string', 'number'],
+                [lastPbn, outPtr]
+            );
+
+            result.innerHTML = 'Speed test: ' + totalTime.toFixed(1) + 'ms total, ' + (totalTime / numDeals).toFixed(2) + 'ms avg per deal';
+
+            if (rc === 1) {
+                for (var row = 1; row <= 4; row++) {
+                    for (var column = 1; column <= 5; column++) {
+                        const cell = result_table.rows[row].cells[column];
+                        const denomination = DENOMINATIONS[column - 1];
+                        const direction = DIRECTION_LETTERS[row - 1];
+                        const strain = DENOM_TO_STRAIN[denomination];
+                        const hand = DIR_TO_HAND[direction];
+                        const index = strain * 4 + hand;
+                        cell.innerHTML = module.getValue(outPtr + index * 4, 'i32');
+                    }
+                }
+                console.log('Last deal DD table displayed in table');
+            } else {
+                result.innerHTML = 'DDS error (code ' + rc + ').';
+            }
+            module._free(outPtr);
+        } catch (err) {
+            console.error('Speed test error:', err);
+        }
+    })();
+}
+
+function runSpeedTestLegacy() {
+    const numDeals = 100;
+    const batchSize = 10;
+
+    console.log('Starting legacy speed test: ' + numDeals + ' random deals in batches of ' + batchSize);
+
+    (async () => {
+        try {
+            if (typeof DDS !== 'function') {
+                console.error('Legacy DDS module not found. Ensure dds-2.9.0.js is loaded.');
+                return;
+            }
+
+            const dds = await DDS({ locateFile: (path) => path === 'dds.wasm' ? 'dds-2.9.0.wasm' : path });
+            dds._SetMaxThreads(1);
+
+            const allHands = [];
+            for (let i = 0; i < numDeals; i++) {
+                allHands.push(generateRandomDeal());
+            }
+
+            const totalStart = performance.now();
+
+            for (let batch = 0; batch < numDeals / batchSize; batch++) {
+                const batchStart = performance.now();
+
+                for (let i = 0; i < batchSize; i++) {
+                    const hands = allHands[batch * batchSize + i];
+                    const dealPtr = writeDealBinary(dds, hands);
+                    const resultsPtr = dds._malloc(80);
+
+                    const rc = dds._CalcDDtable(dealPtr, resultsPtr);
+                    dds._free(dealPtr);
+                    dds._free(resultsPtr);
+
+                    if (rc !== 1) {
+                        console.error('DDS error (code ' + rc + ') on deal ' + (batch * batchSize + i));
+                    }
+                }
+
+                const batchEnd = performance.now();
+                const batchTime = batchEnd - batchStart;
+                console.log('Batch ' + (batch + 1) + ': ' + batchTime.toFixed(1) + 'ms (' + (batchTime / batchSize).toFixed(2) + 'ms per deal)');
+            }
+
+            const totalEnd = performance.now();
+            const totalTime = totalEnd - totalStart;
+            console.log('Total: ' + totalTime.toFixed(1) + 'ms (' + (totalTime / numDeals).toFixed(2) + 'ms per deal)');
+
+            const lastHands = allHands[numDeals - 1];
+            const result = document.getElementById('result');
+            const result_table = document.getElementById('result-table');
+
+            const handHoldings = ['N', 'E', 'S', 'W'].map(dir => {
+                const suits = lastHands[dir];
+                const bySuit = { S: [], H: [], D: [], C: [] };
+                for (const card of suits) {
+                    bySuit[card.charAt(0)].push(card.charAt(1));
+                }
+                return ['S', 'H', 'D', 'C'].map(s => bySuit[s].sort((a, b) => PIPS.indexOf(a) - PIPS.indexOf(b)).join('')).join('.');
+            });
+            clear_results();
+            fillFormWithTestData(handHoldings);
+
+            console.log('Last deal hands:', handHoldings.join(' '));
+
+            const dealPtr = writeDealBinary(dds, lastHands);
+            const resultsPtr = dds._malloc(80);
+
+            const rc = dds._CalcDDtable(dealPtr, resultsPtr);
+
+            result.innerHTML = 'Legacy speed test: ' + totalTime.toFixed(1) + 'ms total, ' + (totalTime / numDeals).toFixed(2) + 'ms avg per deal';
+
+            if (rc === 1) {
+                for (var row = 1; row <= 4; row++) {
+                    for (var column = 1; column <= 5; column++) {
+                        const cell = result_table.rows[row].cells[column];
+                        const strain = DENOM_TO_STRAIN[DENOMINATIONS[column - 1]];
+                        const hand = DIR_TO_HAND[DIRECTION_LETTERS[row - 1]];
+                        const value = (dds.HEAPU32 || dds.HEAP32)[resultsPtr + (strain * 4 + hand) * 4 >> 2];
+                        cell.innerHTML = value;
+                    }
+                }
+                console.log('Last deal DD table displayed in table');
+            }
+            dds._free(dealPtr);
+            dds._free(resultsPtr);
+        } catch (err) {
+            console.error('Legacy speed test error:', err);
+        }
+    })();
+}
+
+function runParallelSpeedTest() {
+    const numDeals = 100;
+    const batchSize = 10;
+
+    console.log('Starting parallel speed test: ' + numDeals + ' deals, both solvers');
+
+    (async () => {
+        try {
+            const module = await loadDdsModule();
+            const dds = await DDS({ locateFile: (path) => path === 'dds.wasm' ? 'dds-2.9.0.wasm' : path });
+            dds._SetMaxThreads(1);
+
+            const allHands = [];
+            for (let i = 0; i < numDeals; i++) {
+                allHands.push(generateRandomDeal());
+            }
+
+            const result = document.getElementById('result');
+            let totalNewMs = 0;
+            let totalLegacyMs = 0;
+            let totalDealCount = 0;
+            const inconsistencies = [];
+
+            for (let batch = 0; batch < numDeals / batchSize; batch++) {
+                const batchStart = performance.now();
+                let batchNewMs = 0;
+                let batchLegacyMs = 0;
+
+                for (let i = 0; i < batchSize; i++) {
+                    const hands = allHands[batch * batchSize + i];
+                    const dealIndex = batch * batchSize + i;
+
+                    // Time new solver
+                    const t1 = performance.now();
+                    const pbn = handsToPbn(hands);
+                    const outPtr = module._malloc(20 * 4);
+                    const rcNew = module.ccall('dds_mvp_calc_table', 'number', ['string', 'number'], [pbn, outPtr]);
+                    const tableNew = rcNew === 1 ? (() => { const t = []; for (let j = 0; j < 20; j++) t.push(module.getValue(outPtr + j * 4, 'i32')); return t; })() : null;
+                    module._free(outPtr);
+                    const t1end = performance.now();
+                    batchNewMs += t1end - t1;
+
+                    // Time legacy solver
+                    const t2 = performance.now();
+                    const dealPtr = writeDealBinary(dds, hands);
+                    const resultsPtr = dds._malloc(80);
+                    const rcLegacy = dds._CalcDDtable(dealPtr, resultsPtr);
+                    const tableLegacy = rcLegacy === 1 ? readDdTableBinary(dds, resultsPtr) : null;
+                    dds._free(dealPtr);
+                    dds._free(resultsPtr);
+                    const t2end = performance.now();
+                    batchLegacyMs += t2end - t2;
+
+                    // Compare results
+                    if (tableNew && tableLegacy) {
+                        for (let j = 0; j < 20; j++) {
+                            if (tableNew[j] !== tableLegacy[j]) {
+                                inconsistencies.push({
+                                    deal: dealIndex,
+                                    index: j,
+                                    newSolver: tableNew[j],
+                                    legacy: tableLegacy[j]
+                                });
+                            }
+                        }
+                    }
+                    totalDealCount++;
+                }
+
+                const batchEnd = performance.now();
+                const batchTime = batchEnd - batchStart;
+                const avgNewMs = batchNewMs / batchSize;
+                const avgLegacyMs = batchLegacyMs / batchSize;
+                totalNewMs += batchNewMs;
+                totalLegacyMs += batchLegacyMs;
+                console.log('Batch ' + (batch + 1) + ': ' + batchTime.toFixed(1) + 'ms (' + (batchTime / batchSize).toFixed(2) + 'ms/ea) | New: ' + avgNewMs.toFixed(2) + 'ms/ea, Legacy: ' + avgLegacyMs.toFixed(2) + 'ms/ea');
+            }
+
+            const lastHands = allHands[numDeals - 1];
+            const result_table = document.getElementById('result-table');
+
+            const handHoldings = ['N', 'E', 'S', 'W'].map(dir => {
+                const suits = lastHands[dir];
+                const bySuit = { S: [], H: [], D: [], C: [] };
+                for (const card of suits) {
+                    bySuit[card.charAt(0)].push(card.charAt(1));
+                }
+                return ['S', 'H', 'D', 'C'].map(s => bySuit[s].sort((a, b) => PIPS.indexOf(a) - PIPS.indexOf(b)).join('')).join('.');
+            });
+            clear_results();
+            fillFormWithTestData(handHoldings);
+
+            let output = 'New solver: ' + totalNewMs.toFixed(1) + 'ms (' + (totalNewMs / numDeals).toFixed(2) + 'ms avg). ' +
+                         'Legacy: ' + totalLegacyMs.toFixed(1) + 'ms (' + (totalLegacyMs / numDeals).toFixed(2) + 'ms avg). ';
+            output += inconsistencies.length === 0
+                ? 'There are 0 discrepancies between the two solvers\' results.'
+                : inconsistencies.length + ' discrepancies between the two solvers\' results.';
+            result.innerHTML = output;
+            console.log(output);
+
+            // Display last hand with new solver
+            const pbn = handsToPbn(lastHands);
+            const outPtr = module._malloc(20 * 4);
+            module.ccall('dds_mvp_calc_table', 'number', ['string', 'number'], [pbn, outPtr]);
+
+            for (var row = 1; row <= 4; row++) {
+                for (var column = 1; column <= 5; column++) {
+                    const cell = result_table.rows[row].cells[column];
+                    const index = DENOM_TO_STRAIN[DENOMINATIONS[column - 1]] * 4 + DIR_TO_HAND[DIRECTION_LETTERS[row - 1]];
+                    const val = module.getValue(outPtr + index * 4, 'i32');
+                    cell.innerHTML = val;
+                }
+            }
+            module._free(outPtr);
+            console.log('DD table displayed in table');
+        } catch (err) {
+            console.error('Parallel speed test error:', err);
+        }
+    })();
+}

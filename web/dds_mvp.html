@@ -29,6 +29,8 @@
     <button  onclick="fillFormWithEveryoneMakes3nTestData()">Everyone makes 3N test deal</button>
     <button  onclick="fillFormWithPartScoreTestData()">Part-score test deal</button>
     <button  onclick="rotateClockwise()">Rotate the hands clockwise</button>
+    <button  onclick="runSpeedTest()">Speed test (100 random deals in groups of 10)</button>
+    <button  onclick="runSpeedTestLegacy()">Speed test (legacy DDS 2.9.0)</button>
 
     <br/>
     <br/>
@@ -70,6 +72,8 @@
     <br/>
 
     <button  onclick="sendJSON()">Double-dummy it!</button>
+    <button  onclick="sendJSONLegacy()">Double-dummy (legacy)</button>
+    <button  onclick="runParallelSpeedTest()">Parallel speed test (compare both)</button>
 
     <p id="result"></p>
 
@@ -123,5 +127,6 @@
     <script src="dds_mvp_wasm_bin.js"></script>
     <script src="dds_mvp_wasm.js"></script>
     <script src="dds_mvp.js"></script>
+    <script src="dds-2.9.0.js"></script>
 </body>
 </html>
