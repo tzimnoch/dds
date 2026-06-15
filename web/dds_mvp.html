@@ -7,9 +7,9 @@
      https://opensource.org/licenses/MIT
 
      Build WASM (from repo root): ./web/update_wasm.sh
-     Then open dds_mvp.html (file:// is OK). Hard-refresh if you rebuilt (Cmd+Shift+R).
-     Or serve this directory:
+     Serve this directory (file:// not supported; wasm must be fetched):
        python3 -m http.server 8080 --directory web
+     Then open http://localhost:8080/dds_mvp.html
 -->
 
 <html lang="en">
@@ -70,6 +70,8 @@
     <br/>
 
     <button  onclick="sendJSON()">Double-dummy it!</button>
+    <button  onclick="sendJSONBinary()">Binary API</button>
+    <button  onclick="runSpeedTest()">Speed test (100 deals)</button>
 
     <p id="result"></p>
 
@@ -120,8 +122,8 @@
         </tr>
     </table>
 
-    <script src="dds_mvp_wasm_bin.js"></script>
-    <script src="dds_mvp_wasm.js"></script>
+    <script src="dds_wasm_bin.js"></script>
+    <script src="dds_wasm.js"></script>
     <script src="dds_mvp.js"></script>
 </body>
 </html>

@@ -1,8 +1,8 @@
 /*
-   Browser entry point for CalcDDtablePBN.
+    Browser entry point for DDS API.
 
-   Copyright 2020-2026 Adam Wildavsky
-   Use of this source code is governed by the MIT license.
+    Copyright 2020-2026 Adam Wildavsky
+    Use of this source code is governed by the MIT license.
 */
 
 #include <cstring>
@@ -48,7 +48,7 @@ auto dds_mvp_calc_table(const char* pbn, int* out_table) -> int
   return RETURN_NO_FAULT;
 }
 
-}  // extern "C"
+}
 
 #if !defined(__EMSCRIPTEN__) && !defined(DDS_MVP_WASM_NO_MAIN)
 auto main() -> int

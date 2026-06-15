@@ -79,7 +79,7 @@ python3 -m http.server 8080 --directory web
 # open http://localhost:8080/dds_mvp.html
 ```
 
-The MVP loads wasm from `dds_mvp_wasm_bin.js` (base64, no network fetch), so `file://` and HTTP both work. Run `./web/update_wasm.sh` to refresh `dds_mvp_wasm.{js,wasm,bin.js}` (includes a small post-process step for Emscripten `isFileURI`; see **Emscripten / emsdk version** above).
+Run `./web/update_wasm.sh` to refresh `dds_wasm.js` and `dds_mvp_wasm_cc.wasm`. The generated `dds_wasm.js` file fetches `dds_mvp_wasm_cc.wasm` at runtime, so you must serve the `web/` directory via HTTP (file:// URLs are not supported).
 
 `bazel clean` does not delete those copied files under `web/` (they live outside `bazel-out`). Use either:
 
@@ -128,7 +128,7 @@ bazel test //examples/wasm:all
 
 `bazel test //...` skips targets tagged `e2e` by default (see `.bazelrc`). Run Playwright tests explicitly, e.g. `bazel test //web:web_e2e_tests` or `bazel test --test_tag_filters=e2e //web:dds_mvp_e2e_test`. To run all tests, including the Playwright tests: `bazel test --test_tag_filters= /...`
 
-- **`//web:dds_mvp_wasm_system_test`** — builds `//web:dds_mvp_wasm`, runs `patch_mvp_wasm` / `gen_wasm_bin_js` / `verify_wasm_js`, then calls `dds_mvp_calc_table` via Node (`web/tests/dds_mvp_wasm_node.mjs`).
+- **`//web:dds_mvp_wasm_system_test`** — builds `//web:dds_mvp_wasm`, then calls `dds_mvp_calc_table` via Node (`web/tests/dds_mvp_wasm_node.mjs`).
 - **`//web:dds_mvp_e2e_test`** — Playwright tests for `dds_mvp.html` over `file://` and HTTP (part-score deal table, validation error). Requires Node, network (Chromium download on first run), and `tags = ["no-sandbox"]`.
 - **`//examples/wasm:wasm_examples_system_test`** — runs `calc_dd_table_pbn.js` under Node and checks for `OK` on all three example hands.
 

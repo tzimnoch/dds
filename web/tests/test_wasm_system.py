@@ -33,8 +33,8 @@ class DdsMvpWasmSystemTest(unittest.TestCase):
                 [
                     node,
                     str(TESTS_ROOT / "dds_mvp_wasm_node.mjs"),
-                    str(tmp / "dds_mvp_wasm.js"),
-                    str(tmp / "dds_mvp_wasm.wasm"),
+                    str(tmp / "dds_wasm.js"),
+                    str(tmp / "dds_mvp_wasm_cc.wasm"),
                 ],
                 capture_output=True,
                 text=True,

@@ -4,12 +4,12 @@ load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("//:CPPVARIABLES.bzl", "DDS_CPPOPTS", "DDS_LINKOPTS", "DDS_LOCAL_DEFINES")
 load("//:wasm_compat.bzl", "WASM_LINKOPTS")
 
-# Emscripten flags for the browser MVP (modularized, no auto-run main).
+# Emscripten flags for the browser MVP with full DDS API.
 WASM_MVP_LINKOPTS = WASM_LINKOPTS + [
     "-sMODULARIZE=1",
-    "-sEXPORT_NAME=createDdsModule",
-    "-sEXPORTED_FUNCTIONS=['_dds_mvp_calc_table','_malloc','_free']",
-    "-sEXPORTED_RUNTIME_METHODS=['ccall','getValue']",
+    "-sEXPORT_NAME='createDdsModule'",
+    "-sEXPORTED_FUNCTIONS=['_CalcDDtable','_CalcDDtablePBN','_SolveBoard','_SolveBoardPBN','_SolveAllBoards','_SolveAllBoardsBin','_SetMaxThreads','_GetDDSInfo','_malloc','_free']",
+    "-sEXPORTED_RUNTIME_METHODS=['ccall','getValue','HEAP32','setValue']",
     "-sENVIRONMENT=web,node",
 ]
 
@@ -30,11 +30,11 @@ cc_binary(
 )
 
 wasm_cc_binary(
-    name = "dds_mvp_wasm",
+    name = "dds_wasm",
     cc_target = ":dds_mvp_wasm_cc",
     outputs = [
-        "dds_mvp_wasm.js",
-        "dds_mvp_wasm.wasm",
+        "dds_wasm.js",
+        "dds_mvp_wasm_cc.wasm",
     ],
 )
 
@@ -67,11 +67,6 @@ py_test(
     size = "small",
     main = "tests/test_wasm_scripts.py",
     srcs = ["tests/test_wasm_scripts.py"],
-    data = [
-        "gen_wasm_bin_js.py",
-        "patch_mvp_wasm.py",
-        "verify_wasm_js.py",
-    ],
 )
 
 # Stages wasm artifacts and runs Node smoke (~1–2s; wasm build is a separate analysis action).
@@ -82,14 +77,11 @@ py_test(
     main = "tests/test_wasm_system.py",
     srcs = ["tests/test_wasm_system.py"],
     data = [
-        ":dds_mvp_wasm",
+        ":dds_wasm",
         "dds_mvp.css",
         "dds_mvp.html",
         "dds_mvp.js",
-        "gen_wasm_bin_js.py",
-        "patch_mvp_wasm.py",
         "tests/dds_mvp_wasm_node.mjs",
-        "verify_wasm_js.py",
     ],
     deps = [":mvp_site"],
 )
@@ -102,12 +94,10 @@ py_test(
     main = "tests/test_mvp_e2e.py",
     srcs = ["tests/test_mvp_e2e.py"],
     data = [
-        ":dds_mvp_wasm",
+        ":dds_wasm",
         "dds_mvp.css",
         "dds_mvp.html",
         "dds_mvp.js",
-        "gen_wasm_bin_js.py",
-        "patch_mvp_wasm.py",
     ],
     deps = [
         ":mvp_site",

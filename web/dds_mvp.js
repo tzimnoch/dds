@@ -13,13 +13,16 @@
 
 /* eslint-env es6 */
 /* exported fillFormWithGrandSlamTestData
-            fillFormWithEveryoneMakes3nTestData
-            fillFormWithPartScoreTestData
-            clearTestData
-            rotateClockwise
-            pageLoad
-            sendJSON
-            */
+             fillFormWithEveryoneMakes3nTestData
+             fillFormWithPartScoreTestData
+             clearTestData
+             rotateClockwise
+             pageLoad
+             sendJSON
+             sendJSONBinary
+             runSpeedTest
+             runParallelSpeedTest
+             */
 
 // It's also useful to pass the code through
 // https://jshint.com/ and https://jslint.com/
@@ -45,6 +48,10 @@ const SUIT_SYMBOLS = {
     "C" : "&clubs;"
 };
 
+// Binary format helpers for direct DDS API access
+const SUIT_ORDER = ["S", "H", "D", "C"];
+const HAND_ORDER = ["N", "E", "S", "W"];
+
 let ddsModulePromise = null;
 
 function loadDdsModule() {
@@ -55,21 +62,175 @@ function loadDdsModule() {
     }
 
     if (!ddsModulePromise) {
-        if (typeof ddsMvpWasmBytes !== "function") {
-            return Promise.reject(new Error(
-                "WASM bytes not found. From the repo root run: ./web/update_wasm.sh"
-            ));
-        }
-        ddsModulePromise = createDdsModule({
-            wasmBinary: ddsMvpWasmBytes()
-        }).catch((error) => {
-            // Allow retry after transient initialization failures.
+        const wasmBinary = typeof ddsWasmBytes === "function" 
+            ? ddsWasmBytes() 
+            : null;
+        ddsModulePromise = createDdsModule({ wasmBinary }).catch((error) => {
             ddsModulePromise = null;
             throw error;
         });
     }
 
     return ddsModulePromise;
+}
+
+// Convert PBN hands array to DDS binary format (16 uint32: one per hand/suit)
+function handsToBinary(hands) {
+    const deal = new Uint32Array(16); // 4 hands x 4 suits
+    
+    for (const hand of HAND_ORDER) {
+        const handIdx = HAND_ORDER.indexOf(hand);
+        for (const suit of SUIT_ORDER) {
+            const suitIdx = SUIT_ORDER.indexOf(suit);
+            const cards = hands[hand] || [];
+            let bits = 0;
+            for (const card of cards) {
+                if (card.charAt(0) === suit) {
+                    const pip = card.charAt(1);
+                    const pipIdx = PIPS.indexOf(pip);
+                    // In DDS binary format: bit 14 for Ace, bit 2 for 2
+                    bits |= (1 << (14 - pipIdx));
+                }
+            }
+            deal[handIdx * 4 + suitIdx] = bits;
+        }
+    }
+    return deal;
+}
+
+// Call CalcDDtable directly with binary format deal
+async function sendJSONBinary() {
+    const result = document.getElementById("result");
+    const result_table = document.getElementById("result-table");
+
+    var hands = collectHands();
+
+    const error_message = inputIsValid(hands);
+
+    if (error_message.length) {
+        clear_results();
+        result.innerHTML = error_message;
+        return;
+    }
+
+    clear_results();
+    result.innerHTML = "Computing&hellip;";
+
+    try {
+        const module = await loadDdsModule();
+        const deal = handsToBinary(hands);
+        const dealPtr = module._malloc(16 * 4);
+        const outPtr = module._malloc(20 * 4);
+
+        try {
+            // Write deal to WASM memory
+            module.HEAP32.set(deal, dealPtr >> 2);
+
+            // Call CalcDDtable with binary format
+            const rc = module.ccall(
+                "CalcDDtable",
+                "number",
+                ["number", "number"],
+                [dealPtr, outPtr]
+            );
+
+            if (rc !== 1) {
+                result.innerHTML = "DDS error (code " + rc + ").";
+                return;
+            }
+
+            for (var row = 1; row <= 4; row++) {
+                for (var column = 1; column <= 5; column++) {
+                    const cell = result_table.rows[row].cells[column];
+                    const denomination = DENOMINATIONS[column - 1];
+                    const direction = DIRECTION_LETTERS[row - 1];
+                    const strain = DENOM_TO_STRAIN[denomination];
+                    const hand = DIR_TO_HAND[direction];
+                    const index = strain * 4 + hand;
+                    cell.innerHTML = module.getValue(outPtr + index * 4, "i32");
+                }
+            }
+
+            result.innerHTML = "";
+        } finally {
+            module._free(dealPtr);
+            module._free(outPtr);
+        }
+    } catch (err) {
+        clear_results();
+        result.innerHTML = err instanceof Error
+            ? err.message
+            : err == null
+                ? "Unknown error"
+                : String(err);
+    }
+}
+
+// Generate a random deal
+function generateRandomDeal() {
+    const deck = [];
+    for (const suit of SUIT_ORDER) {
+        for (let i = 0; i < 13; i++) {
+            deck.push(suit + PIPS[i]);
+        }
+    }
+    // Fisher-Yates shuffle
+    for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    // Distribute to hands
+    const hands = { N: [], E: [], S: [], W: [] };
+    for (let i = 0; i < 52; i++) {
+        const hand = HAND_ORDER[i % 4];
+        hands[hand].push(deck[i]);
+    }
+    return hands;
+}
+
+// Speed test: run 100 deals in groups of 10
+async function runSpeedTest() {
+    const result = document.getElementById("result");
+    result.innerHTML = "Running speed test...";
+
+    try {
+        const module = await loadDdsModule();
+        const dealPtr = module._malloc(16 * 4);
+        const outPtr = module._malloc(20 * 4);
+
+        try {
+            const deals = [];
+            for (let i = 0; i < 100; i++) {
+                deals.push(generateRandomDeal());
+            }
+
+            const start = performance.now();
+            for (const hands of deals) {
+                const deal = handsToBinary(hands);
+                module.HEAP32.set(deal, dealPtr >> 2);
+                const rc = module.ccall("CalcDDtable", "number", 
+                    ["number", "number"], [dealPtr, outPtr]);
+                if (rc !== 1) throw new Error("DDS error " + rc);
+            }
+            const elapsed = performance.now() - start;
+
+            // Show last deal and result
+            const lastPbn = handsToPbn(deals[99]);
+            const lastResult = [];
+            for (let i = 0; i < 20; i++) {
+                lastResult.push(module.getValue(outPtr + i * 4, "i32"));
+            }
+
+            result.innerHTML = `100 deals in ${elapsed.toFixed(1)}ms (avg ${(elapsed/100).toFixed(1)}ms/deal)<br/>
+                Last PBN: ${lastPbn}<br/>
+                Last result: [${lastResult.join(", ")}]`;
+        } finally {
+            module._free(dealPtr);
+            module._free(outPtr);
+        }
+    } catch (err) {
+        result.innerHTML = err instanceof Error ? err.message : String(err);
+    }
 }
 
 function handsToPbn(hands) {
